@@ -307,24 +307,31 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 	return string(buf), nil
 }
 
-func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
+func (mc *mysqlConn) Exec(query string, args []driver.Value, reuseQueryBuf bool) (driver.Result, error) {
 	if mc.closed.Load() {
 		mc.log(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	if len(args) != 0 {
-		if !mc.cfg.InterpolateParams {
-			return nil, driver.ErrSkip
+
+	var err error
+	if reuseQueryBuf {
+		err = mc.execBytes(args[0].([]byte))
+	} else {
+		if len(args) != 0 {
+			if !mc.cfg.InterpolateParams {
+				return nil, driver.ErrSkip
+			}
+			// try to interpolate the parameters to save extra roundtrips for preparing and closing a statement
+			prepared, err := mc.interpolateParams(query, args)
+			if err != nil {
+				return nil, err
+			}
+			query = prepared
 		}
-		// try to interpolate the parameters to save extra roundtrips for preparing and closing a statement
-		prepared, err := mc.interpolateParams(query, args)
-		if err != nil {
-			return nil, err
-		}
-		query = prepared
+
+		err = mc.exec(query)
 	}
 
-	err := mc.exec(query)
 	if err == nil {
 		copied := mc.result
 		return &copied, err
@@ -337,6 +344,34 @@ func (mc *mysqlConn) exec(query string) error {
 	handleOk := mc.clearResult()
 	// Send command
 	if err := mc.writeCommandPacketStr(comQuery, query); err != nil {
+		return mc.markBadConn(err)
+	}
+
+	// Read Result
+	resLen, err := handleOk.readResultSetHeaderPacket()
+	if err != nil {
+		return err
+	}
+
+	if resLen > 0 {
+		// columns
+		if err := mc.readUntilEOF(); err != nil {
+			return err
+		}
+
+		// rows
+		if err := mc.readUntilEOF(); err != nil {
+			return err
+		}
+	}
+
+	return handleOk.discardResults()
+}
+
+func (mc *mysqlConn) execBytes(query []byte) error {
+	handleOk := mc.clearResult()
+	// Send command
+	if err := mc.writeCommandPacketBytes(comQuery, query); err != nil {
 		return mc.markBadConn(err)
 	}
 
@@ -507,7 +542,7 @@ func (mc *mysqlConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver
 }
 
 func (mc *mysqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	dargs, err := namedValueToValue(args)
+	dargs, _, err := namedValueToValue(args)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +561,7 @@ func (mc *mysqlConn) QueryContext(ctx context.Context, query string, args []driv
 }
 
 func (mc *mysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	dargs, err := namedValueToValue(args)
+	dargs, reuseQueryBuf, err := namedValueToValue(args)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +571,7 @@ func (mc *mysqlConn) ExecContext(ctx context.Context, query string, args []drive
 	}
 	defer mc.finish()
 
-	return mc.Exec(query, dargs)
+	return mc.Exec(query, dargs, reuseQueryBuf)
 }
 
 func (mc *mysqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
@@ -560,7 +595,7 @@ func (mc *mysqlConn) PrepareContext(ctx context.Context, query string) (driver.S
 }
 
 func (stmt *mysqlStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	dargs, err := namedValueToValue(args)
+	dargs, _, err := namedValueToValue(args)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +614,7 @@ func (stmt *mysqlStmt) QueryContext(ctx context.Context, args []driver.NamedValu
 }
 
 func (stmt *mysqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	dargs, err := namedValueToValue(args)
+	dargs, _, err := namedValueToValue(args)
 	if err != nil {
 		return nil, err
 	}

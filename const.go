@@ -185,3 +185,7 @@ const (
 	cachingSha2PasswordFastAuthSuccess           = 3
 	cachingSha2PasswordPerformFullAuthentication = 4
 )
+
+const (
+	ReuseQueryBuf = "ReuseQueryBuf"
+)

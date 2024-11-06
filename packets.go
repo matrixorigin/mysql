@@ -444,6 +444,17 @@ func (mc *mysqlConn) writeCommandPacketStr(command byte, arg string) error {
 	return mc.writePacket(data)
 }
 
+func (mc *mysqlConn) writeCommandPacketBytes(command byte, arg []byte) error {
+	// Reset Packet Sequence
+	mc.sequence = 0
+
+	// Add command byte
+	arg[4] = command
+
+	// Send CMD packet
+	return mc.writePacket(arg)
+}
+
 func (mc *mysqlConn) writeCommandPacketUint32(command byte, arg uint32) error {
 	// Reset Packet Sequence
 	mc.sequence = 0

@@ -815,16 +815,20 @@ func (ae *atomicError) Value() error {
 	return nil
 }
 
-func namedValueToValue(named []driver.NamedValue) ([]driver.Value, error) {
+func namedValueToValue(named []driver.NamedValue) ([]driver.Value, bool, error) {
 	dargs := make([]driver.Value, len(named))
 	for n, param := range named {
+		if param.Name == ReuseQueryBuf {
+			dargs[0] = param.Value
+			return dargs, true, nil
+		}
 		if len(param.Name) > 0 {
 			// TODO: support the use of Named Parameters #561
-			return nil, errors.New("mysql: driver does not support the use of Named Parameters")
+			return nil, false, errors.New("mysql: driver does not support the use of Named Parameters")
 		}
 		dargs[n] = param.Value
 	}
-	return dargs, nil
+	return dargs, false, nil
 }
 
 func mapIsolationLevel(level driver.IsolationLevel) (string, error) {
